@@ -1,4 +1,4 @@
-// 플러그인(WebPanel)과 WebSocket 으로 통신하는 클라이언트.
+// 중계 서버를 거쳐 플러그인(WebPanel)과 WebSocket 으로 통신하는 클라이언트.
 // request(action, data) → Promise 로 응답을 받고, 서버가 먼저 보내는 실시간 이벤트는 on(event, fn) 으로 받는다.
 
 export class PanelClient {
@@ -12,6 +12,7 @@ export class PanelClient {
     this.closedByUser = false;
     this.everConnected = false;
     this.retry = 0;
+    this.pingTimer = null;
   }
 
   on(event, fn) {
@@ -52,10 +53,12 @@ export class PanelClient {
           if (msg.ok) {
             this.everConnected = true;
             this.retry = 0;
+            this.startPing(ws);
             this.emit('connection', 'open');
             resolve();
           } else {
-            reject(new Error(msg.error || '로그인 실패'));
+            reject(new Error(errorText(msg.error) || '로그인 실패'));
+            try { ws.close(); } catch { /* 무시 */ }
           }
           return;
         }
@@ -67,11 +70,12 @@ export class PanelClient {
         if (p) {
           this.pending.delete(msg.id);
           clearTimeout(p.timer);
-          msg.ok ? p.resolve(msg.data) : p.reject(new Error(msg.error || '요청 실패'));
+          msg.ok ? p.resolve(msg.data) : p.reject(new Error(errorText(msg.error) || '요청 실패'));
         }
       };
 
       ws.onclose = (ev) => {
+        clearInterval(this.pingTimer);
         for (const p of this.pending.values()) {
           clearTimeout(p.timer);
           p.reject(new Error('연결이 끊어졌습니다'));
@@ -86,6 +90,14 @@ export class PanelClient {
         if (!this.closedByUser && this.everConnected && ev.code !== 1008) this.scheduleReconnect();
       };
     });
+  }
+
+  /** 연결이 끊기지 않게 30초마다 ping (중계 서버가 자동으로 pong 응답) */
+  startPing(ws) {
+    clearInterval(this.pingTimer);
+    this.pingTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+    }, 30000);
   }
 
   scheduleReconnect() {
@@ -124,19 +136,26 @@ export class PanelClient {
 
   close() {
     this.closedByUser = true;
+    clearInterval(this.pingTimer);
     if (this.ws) this.ws.close();
   }
+}
+
+function errorText(e) {
+  if (e === 'plugin offline') return '마인크래프트 서버가 중계 서버에 연결되어 있지 않습니다. 서버가 켜져 있는지, 플러그인 config.yml 의 relay-url / relay-secret 을 확인하세요';
+  return e;
 }
 
 function closeReason(ev) {
   switch (ev.reason) {
     case 'invalid token': return '토큰이 올바르지 않습니다';
     case 'too many failed logins': return '로그인 실패가 많아 잠시 차단되었습니다. 나중에 다시 시도하세요';
-    case 'origin not allowed': return '이 사이트 주소가 플러그인 config.yml 의 allowed-origins 에 없습니다';
+    case 'origin not allowed': return '이 사이트 주소가 중계 서버의 ALLOWED_ORIGINS 에 없습니다';
+    case 'plugin offline': return errorText('plugin offline');
     case 'auth timeout': return '로그인 시간 초과';
   }
   if (location.protocol === 'https:' && /^ws:\/\//i.test(ev.target?.url || '')) {
     return 'https 사이트에서는 ws:// 주소에 연결할 수 없습니다. wss:// 주소(Cloudflare Tunnel 등)를 쓰세요';
   }
-  return '서버에 연결할 수 없습니다. 주소, 서버 실행 여부, 터널 상태를 확인하세요';
+  return '중계 서버에 연결할 수 없습니다. 주소(wss://...workers.dev)를 확인하세요';
 }

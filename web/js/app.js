@@ -82,9 +82,11 @@ function showLogin(error = '') {
 
 async function login(url, token, remember) {
   url = url.trim().replace(/\/+$/, '');
-  if (!/^wss?:\/\//i.test(url)) {
-    url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + url.replace(/^https?:\/\//i, '');
-  }
+  // https://... 나 주소만 적어도 wss://.../panel 로 바꿔 준다
+  if (/^https:\/\//i.test(url)) url = 'wss://' + url.slice(8);
+  else if (/^http:\/\//i.test(url)) url = 'ws://' + url.slice(7);
+  else if (!/^wss?:\/\//i.test(url)) url = 'wss://' + url;
+  if (!/\/panel$/i.test(url)) url += '/panel';
   $('#login-btn').disabled = true;
   $('#login-error').textContent = '';
   const c = new PanelClient(url, token.trim());

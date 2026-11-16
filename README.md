@@ -3,9 +3,19 @@
 웹사이트에서만 서버를 관리하는 Paper 플러그인(**WebPanel**)과 관리 사이트입니다.
 인게임 명령어는 하나도 없고, 토큰을 아는 사람(나)만 사이트에서 조작할 수 있습니다.
 
-- 대상 서버: **Paper 26.3** (Java 25)
-- `web/` : 관리 사이트 (빌드 과정 없는 순수 HTML/JS → Cloudflare Pages에 그대로 올림)
-- `plugin/` : 플러그인 소스 (Gradle) — **이 저장소에는 올리지 않고 개인 컴퓨터에만 보관**
+- 대상 서버: **Paper 26.3** (Java 25), 호스팅 업체 서버에서도 동작 (포트 개방 불필요)
+- `web/` : 관리 사이트 (빌드 과정 없는 순수 HTML/JS → Cloudflare Pages)
+- `plugin/` : 플러그인 소스 — **이 저장소에는 올리지 않고 개인 컴퓨터에만 보관**
+- `relay/` : 중계 서버(Cloudflare Worker) 소스 — **개인 컴퓨터에만 보관**
+
+## 구조
+
+```
+[관리 사이트 (Pages)] ──wss──▶ [중계 서버 (Cloudflare Worker)] ◀──wss── [플러그인 (마인크래프트 서버)]
+       사이트가 접속                   둘이 여기서 만남                 플러그인이 밖으로 접속
+```
+
+플러그인이 중계 서버에 **밖으로** 접속하기 때문에, 호스팅 서버에서 포트를 열거나 프로그램을 설치할 필요가 없습니다.
 
 ## 기능
 
@@ -18,115 +28,62 @@
 | 서버 설정 | MOTD, 최대 인원, 화이트리스트, 기본 게임모드, 월드별 난이도·시간·날씨·PvP·게임 규칙 | 즉시 적용 + 바뀌면 자동 갱신 |
 | server.properties | 파일 직접 편집 | 재시작 후 적용 |
 
-> 인벤토리/엔더상자 수정은 **플레이어가 접속 중일 때만** 됩니다. (오프라인 플레이어 데이터 편집은 아직 없음)
+> 인벤토리/엔더상자 수정은 **플레이어가 접속 중일 때만** 됩니다.
 
-## 구조
+## 설치
 
-```
-[관리 사이트 (Cloudflare Pages, https)]
-        │  wss:// (WebSocket, 토큰 로그인)
-        ▼
-[Cloudflare Tunnel]  ← 서버 컴퓨터에서 cloudflared 실행. 포트포워딩 필요 없음
-        │  ws://127.0.0.1:8765
-        ▼
-[WebPanel 플러그인 (Paper 서버 안)]
-```
-
-https 사이트에서는 암호화되지 않은 `ws://` 주소에 연결할 수 없어서, **Cloudflare Tunnel로 `wss://` 주소를 만들어 주는 게 필수**입니다.
-
----
-
-## 1. 플러그인 빌드 / 설치
+### 1. 중계 서버 (한 번만)
 
 ```bash
-cd plugin
-./gradlew build
+cd relay
+npm install
+npx wrangler login
+npx wrangler deploy
+npx wrangler secret put PLUGIN_SECRET
 ```
 
-(Windows PowerShell 에서는 `.\gradlew.bat build`)
-결과물: `plugin/build/libs/WebPanel-1.0.0.jar` → 서버의 `plugins/` 폴더에 넣고 서버를 켭니다.
+- `wrangler.toml` 의 `ALLOWED_ORIGINS` 에 관리 사이트 주소를 넣어 두면 다른 사이트에서의 접속이 막힙니다.
+- `PLUGIN_SECRET` 은 플러그인 config.yml 의 `relay-secret` 과 같아야 합니다.
 
-처음 켜지면 콘솔에 이렇게 **로그인 토큰**이 나옵니다. (`plugins/WebPanel/config.yml` 에도 저장됨)
+### 2. 플러그인
 
-```
-[WebPanel] WebPanel 로그인 토큰이 새로 만들어졌습니다:
-[WebPanel] 3f9a....
-```
-
-토큰이 유출됐다면 `config.yml` 의 `token: ''` 으로 비우고 서버를 재시작하면 새로 만들어집니다.
-
-## 2. Cloudflare Tunnel 로 wss:// 주소 만들기
-
-### A. 내 도메인이 Cloudflare에 있는 경우 (권장, 주소가 고정됨)
-
-1. Cloudflare 대시보드 > **Zero Trust** > **Networks** > **Tunnels** > **Create a tunnel** > **Cloudflared**
-2. 이름 입력 (예: `mc-panel`) → 나오는 설치 명령을 서버 컴퓨터에서 실행 (Windows 서비스로 설치됨)
-3. **Public Hostname** 추가
-   - Subdomain: `mc-api` / Domain: 내 도메인
-   - Service: Type `HTTP`, URL `127.0.0.1:8765`
-4. 사이트 로그인 화면의 서버 주소에 `wss://mc-api.내도메인` 입력
-
-### B. 도메인이 없는 경우 (테스트용, 켤 때마다 주소가 바뀜)
-
-```bash
-cloudflared tunnel --url http://127.0.0.1:8765
-```
-
-출력되는 `https://xxxx.trycloudflare.com` 을 `wss://xxxx.trycloudflare.com` 으로 바꿔서 입력합니다.
-
-## 3. 사이트를 GitHub + Cloudflare Pages 로 배포
-
-1. 이 폴더 전체를 GitHub 저장소에 올립니다.
-2. Cloudflare 대시보드 > **Workers & Pages** > **Create** > **Pages** > **Connect to Git** > 저장소 선택
-3. 빌드 설정
-   - Framework preset: `None`
-   - Build command: (비워 둠)
-   - Build output directory: `web`
-4. **Save and Deploy** → `https://프로젝트명.pages.dev` 주소가 생깁니다.
-
-이후로는 GitHub에 push 할 때마다 자동으로 다시 배포됩니다.
-
-## 4. 보안 설정 (꼭 하세요)
-
-1. **허용 사이트 제한** — `plugins/WebPanel/config.yml`
-
+1. `plugin/build/libs/WebPanel-x.x.x.jar` 를 서버의 `plugins/` 폴더에 넣고 서버를 켭니다. (옛 버전 jar 는 지우기)
+2. `plugins/WebPanel/config.yml` 을 엽니다.
    ```yaml
-   allowed-origins:
-     - https://프로젝트명.pages.dev
+   relay-url: 'https://mc-relay.내계정.workers.dev'
+   relay-secret: '중계 서버에 등록한 PLUGIN_SECRET'
    ```
+3. 서버를 재시작합니다. 콘솔에 `중계 서버에 연결되었습니다` 가 나오면 성공.
+4. 콘솔에 나온 **로그인 토큰**(config.yml 의 `token`)을 복사해 둡니다.
 
-   저장 후 서버 재시작. 다른 사이트에서 이 서버에 접속하려는 시도를 막습니다.
+### 3. 관리 사이트 (Cloudflare Pages)
 
-2. **토큰은 사이트 코드에 들어가지 않습니다.** 로그인할 때 입력하고, "이 브라우저에 기억하기"를 체크했을 때만 그 브라우저에 저장됩니다. 공용 PC에서는 체크하지 마세요.
-3. 같은 IP에서 토큰을 5번 틀리면 15분간 차단됩니다. (`auth:` 항목에서 조정)
-4. 더 강하게 막고 싶다면 Cloudflare Zero Trust > **Access** 로 사이트(`pages.dev`)와 터널 주소(`mc-api.내도메인`) 모두에 "내 이메일만 허용" 정책을 걸 수 있습니다.
-5. `host: 127.0.0.1` 은 바꾸지 마세요. 터널을 거치지 않은 외부 직접 접속을 막아 줍니다.
+Workers & Pages > Create > Pages > Connect to Git > 이 저장소
+- Framework preset `None`, Build command 비움, Build output directory `web`
 
-## 설정 파일 (`plugins/WebPanel/config.yml`)
+사이트에서 **중계 서버 주소**(`https://mc-relay.내계정.workers.dev`)와 **로그인 토큰**을 입력하고 연결합니다.
 
-| 항목 | 기본값 | 설명 |
-|---|---|---|
-| `host` / `port` | `127.0.0.1` / `8765` | WebSocket 서버 주소 |
-| `token` | 자동 생성 | 로그인 토큰 |
-| `allowed-origins` | `'*'` | 접속 허용 사이트 |
-| `auth.max-failures` / `auth.block-minutes` | 5 / 15 | 로그인 실패 차단 |
-| `sync.inventory-interval-ticks` | 5 | 인벤토리 확인 주기 (20틱 = 1초) |
-| `sync.status-interval-ticks` | 40 | 상태/설정/접속자 갱신 주기 |
-| `console-buffer-lines` | 500 | 웹 콘솔에 보관할 로그 줄 수 |
+## 보안
+
+- **열쇠 두 개**: 플러그인 ↔ 중계는 `relay-secret`, 사이트 ↔ 플러그인은 로그인 토큰. 토큰은 플러그인이 직접 확인하므로 중계 서버는 모릅니다.
+- 같은 IP 에서 토큰을 5번 틀리면 15분간 차단됩니다. (config.yml `auth:`)
+- 토큰은 사이트 코드에 없고, "이 브라우저에 기억하기"를 체크했을 때만 브라우저에 저장됩니다.
+- 토큰이나 비밀키가 유출되면: 토큰은 config.yml 에서 지우고 재시작(자동 재생성), 비밀키는 `wrangler secret put PLUGIN_SECRET` 로 바꾸고 config.yml 도 같이 수정.
 
 ## 문제 해결
 
 | 증상 | 원인 / 해결 |
 |---|---|
-| "서버에 연결할 수 없습니다" | 서버가 켜져 있는지, cloudflared 가 실행 중인지, 주소가 `wss://` 로 시작하는지 확인 |
-| "https 사이트에서는 ws:// 주소에 연결할 수 없습니다" | 터널 주소(`wss://`)를 쓰세요 |
-| "이 사이트 주소가 allowed-origins 에 없습니다" | config.yml 의 `allowed-origins` 에 사이트 주소를 정확히(끝에 `/` 없이) 넣고 재시작 |
-| 콘솔에 "포트가 이미 사용 중" | `port` 를 다른 번호로 바꾸고, 터널의 Service URL 도 같이 바꾸기 |
-| 아이템 아이콘이 글자로 나옴 | 외부 아이콘 이미지가 없는 아이템입니다. 기능에는 문제없음 |
+| "마인크래프트 서버가 중계 서버에 연결되어 있지 않습니다" | 서버가 꺼져 있거나 config.yml 의 relay-url / relay-secret 이 비었거나 틀림. 서버 콘솔의 WebPanel 로그 확인 |
+| 콘솔에 "중계 비밀키(relay-secret)가 틀렸습니다" | config.yml 의 relay-secret 을 중계 서버의 PLUGIN_SECRET 과 똑같이 |
+| 콘솔에 "중계 서버 접속 실패" 가 계속 반복 | 호스팅 업체가 바깥 접속을 막았을 수 있음 → 업체에 문의 |
+| "이 사이트 주소가 중계 서버의 ALLOWED_ORIGINS 에 없습니다" | relay/wrangler.toml 의 ALLOWED_ORIGINS 수정 후 다시 deploy |
+| "토큰이 올바르지 않습니다" | config.yml 의 token 값을 그대로 복사 |
 
 ## 통신 규칙 (참고)
 
 ```jsonc
+// 사이트 ↔ 플러그인 (중계 서버는 그대로 전달)
 // 요청          {"id": 1, "action": "inv.set", "data": {...}}
 // 응답          {"id": 1, "ok": true, "data": {...}}   또는 {"id":1, "ok":false, "error":"..."}
 // 실시간 이벤트  {"event": "inv", "data": {...}}
