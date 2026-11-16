@@ -142,24 +142,22 @@ function bindClient() {
 }
 
 async function loadInitial() {
-  try {
-    const [status, sets, pl, hist] = await Promise.all([
-      client.request('server.status'),
-      client.request('server.settings'),
-      client.request('players.list'),
-      client.request('console.history'),
-    ]);
-    renderStatus(status);
-    settings = sets;
-    renderSettings();
-    players = pl;
-    renderPlayers();
+  // 하나가 실패해도 나머지는 표시되도록 각각 처리
+  const [status, sets, pl, hist] = await Promise.allSettled([
+    client.request('server.status'),
+    client.request('server.settings'),
+    client.request('players.list'),
+    client.request('console.history'),
+  ]);
+  const fail = (what, r) => toast(`${what}을(를) 불러오지 못했습니다: ${r.reason?.message || r.reason}`, true);
+  if (status.status === 'fulfilled') renderStatus(status.value); else fail('서버 상태', status);
+  if (sets.status === 'fulfilled') { settings = sets.value; renderSettings(); } else fail('서버 설정', sets);
+  if (pl.status === 'fulfilled') { players = pl.value; renderPlayers(); } else fail('플레이어 목록', pl);
+  if (hist.status === 'fulfilled') {
     consoleLines.length = 0;
     $('#con-log').textContent = '';
-    hist.lines.forEach(addConsoleLine);
-  } catch (e) {
-    toast('초기 데이터를 불러오지 못했습니다: ' + e.message, true);
-  }
+    hist.value.lines.forEach(addConsoleLine);
+  } else fail('콘솔 기록', hist);
 }
 
 // ================================================================ 탭
@@ -403,7 +401,15 @@ function renderGamerules(w) {
   for (const input of box.querySelectorAll('input[data-rule]')) setIfIdle(input, w.gamerules[input.dataset.rule]);
 }
 
+async function reloadSettings() {
+  try {
+    settings = await client.request('server.settings');
+    renderSettings();
+  } catch (e) { toast('서버 설정을 불러오지 못했습니다: ' + e.message, true); }
+}
+
 async function setGamerule(rule, value) {
+  if (!selectedWorld) { reloadSettings(); return; }
   try {
     settings = await client.request('server.gamerule', { world: selectedWorld, rule, value });
     toast(`${rule} = ${value}`);
@@ -412,6 +418,11 @@ async function setGamerule(rule, value) {
 }
 
 async function applySetting(key, value, world) {
+  if (arguments.length >= 3 && !world) {
+    toast('월드 목록을 아직 받지 못했습니다. 잠시 후 다시 시도하거나 새로고침하세요', true);
+    reloadSettings();
+    return;
+  }
   try {
     settings = await client.request('server.setting', { key, value, world });
     toast('적용했습니다');
