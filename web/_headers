@@ -1,0 +1,6 @@
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Robots-Tag: noindex, nofollow
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://mc.nerothe.com https://assets.mcasset.cloud https://mc-heads.net; connect-src 'self' wss: ws:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'
