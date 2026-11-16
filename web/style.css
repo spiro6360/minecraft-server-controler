@@ -171,7 +171,11 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .slot.drop-target { background: #c6e6b4; }
 .slot.flash { animation: flash .6s; }
 @keyframes flash { from { background: #f7e27a; } }
-.slot img { width: 32px; height: 32px; image-rendering: pixelated; pointer-events: none; }
+.slot .icon { width: 32px; height: 32px; display: grid; place-items: center; pointer-events: none; }
+.slot .icon.loading { border-radius: 4px; background: linear-gradient(90deg, #7a7a7a 25%, #9a9a9a 50%, #7a7a7a 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite linear; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.slot img { width: 32px; height: 32px; image-rendering: pixelated; pointer-events: none; opacity: 0; transition: opacity .15s; }
+.slot img.ready { opacity: 1; }
 .slot .txt { font-size: 9px; color: #222; text-align: center; line-height: 1.05; word-break: break-all; padding: 1px; pointer-events: none; }
 .slot .cnt {
   position: absolute; right: 1px; bottom: -1px; font-size: 13px; font-weight: 700; color: #fff;
@@ -184,7 +188,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
   background: linear-gradient(120deg, transparent 30%, rgba(190, 120, 255, .35) 50%, transparent 70%);
 }
 .slot.big { width: 56px; height: 56px; cursor: default; }
-.slot.big img { width: 40px; height: 40px; }
+.slot.big .icon, .slot.big img { width: 40px; height: 40px; }
 
 .trash {
   margin-top: 14px; border: 2px dashed #6b2c2c; color: #ffb3b3; border-radius: 8px;
@@ -259,7 +263,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
   .grid9 { grid-template-columns: repeat(9, 34px); }
   .armor-col { grid-template-columns: auto 34px; }
   .slot { width: 34px; height: 34px; }
-  .slot img { width: 24px; height: 24px; }
+  .slot .icon, .slot img { width: 24px; height: 24px; }
   .table th:nth-child(n+5), .table td:nth-child(n+5) { display: none; }
   .table td:last-child { display: table-cell; }
 }

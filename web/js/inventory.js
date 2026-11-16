@@ -1,6 +1,6 @@
 // 플레이어 상세 화면: 정보/관리 버튼, 인벤토리·엔더상자 실시간 표시, 끌어서 옮기기, 아이템 편집.
 
-import { renderItem, attachTooltip, hideTooltip, prettyName, shortId, displayName } from './items.js';
+import { renderItem, attachTooltip, hideTooltip, prettyName, shortId, displayName, warmIcons } from './items.js';
 
 const $ = (s) => document.querySelector(s);
 const PALETTE_LIMIT = 400;
@@ -82,6 +82,7 @@ export class InventoryView {
       this.registry = await this.client.request('registry.items');
       $('#dl-items').innerHTML = this.registry.items.map((id) => `<option value="${shortId(id)}">`).join('');
       this.renderPalette();
+      warmIcons(this.registry.items, 150);
     } catch (e) {
       this.ui.toast('아이템 목록을 불러오지 못했습니다: ' + e.message, true);
     }
@@ -94,9 +95,14 @@ export class InventoryView {
     const prev = this.items[snap.type] || [];
     this.items[snap.type] = snap.items;
     this.online = snap.online;
-    $('#inv-offline').classList.toggle('hidden', snap.online);
+    this.hasData = snap.online || snap.hasData;
+    const note = $('#inv-offline');
+    note.classList.toggle('hidden', snap.online);
+    note.textContent = snap.hasData
+      ? '오프라인 플레이어입니다. 서버의 저장 파일을 직접 수정합니다. (접속하면 자동으로 실시간 모드로 바뀝니다)'
+      : '이 플레이어의 저장 파일이 없어 표시할 수 없습니다. (한 번도 접속하지 않았을 수 있음)';
     $('#pd-live').classList.toggle('off', !snap.online);
-    $('#pd-live').textContent = snap.online ? '실시간 동기화' : '오프라인';
+    $('#pd-live').textContent = snap.online ? '실시간 동기화' : '오프라인 · 저장 파일 편집';
 
     for (const el of this.slotEls) {
       if (el.dataset.type !== snap.type) continue;
@@ -461,7 +467,7 @@ export class InventoryView {
       el.className = 'slot';
       el.draggable = true;
       const item = { id, amount: 1 };
-      renderItem(el, item);
+      renderItem(el, item, { lazy: true });
       attachTooltip(el, () => item);
       el.addEventListener('dragstart', (e) => {
         hideTooltip();
