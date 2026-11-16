@@ -1,6 +1,0 @@
-name: WebPanel
-version: '${version}'
-main: kr.mcpanel.WebPanelPlugin
-api-version: '26.3'
-description: 웹사이트에서만 서버/플레이어/인벤토리를 관리하는 플러그인 (인게임 명령어 없음)
-author: owner
