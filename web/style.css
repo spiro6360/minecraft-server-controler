@@ -216,6 +216,17 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .ench select { flex: 1; }
 
 .pal-grid { display: grid; grid-template-columns: repeat(auto-fill, 44px); gap: 4px; margin-top: 10px; max-height: 420px; overflow-y: auto; }
+.pal-grid.books { display: flex; flex-direction: column; gap: 6px; }
+.book-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.book-row > .slot { flex: none; }
+.book-name { flex: 1; min-width: 0; font-size: 13px; }
+.book-id { font-size: 11px; }
+.book-levels { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.book-levels .btn { min-width: 34px; }
+.seg { display: flex; gap: 4px; }
+.shulker { border-color: #8e5aa8; }
+.sh-grid { display: grid; grid-template-columns: repeat(9, minmax(0, 44px)); gap: 4px; margin-top: 8px; }
+.sh-grid .slot { width: 100%; height: auto; aspect-ratio: 1; }
 
 /* ---------------- 콘솔 ---------------- */
 .console-card { display: flex; flex-direction: column; height: calc(100vh - 110px); min-height: 400px; }

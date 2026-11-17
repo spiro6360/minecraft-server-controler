@@ -130,6 +130,14 @@
         </div>
 
         <div class="side-col">
+          <div class="card shulker hidden" id="shulker">
+            <div class="row between"><h2 id="sh-title">셜커 상자</h2>
+              <div class="row"><button class="btn small danger ghost" data-clear="shulker">전부 비우기</button><button class="btn small ghost" id="sh-close">닫기</button></div>
+            </div>
+            <p class="muted small-text" id="sh-where"></p>
+            <div class="sh-grid" id="sh-grid"></div>
+          </div>
+
           <div class="card editor hidden" id="editor">
             <div class="row between"><h2 id="ed-title">아이템 편집</h2><button class="btn small ghost" id="ed-close">닫기</button></div>
             <div class="ed-preview"><div class="slot big" id="ed-icon"></div><div><div id="ed-id" class="mono"></div><div class="muted" id="ed-where"></div></div></div>
@@ -156,12 +164,14 @@
           </div>
 
           <div class="card palette">
-            <h2>아이템 추가</h2>
+            <div class="row between"><h2>아이템 추가</h2>
+              <div class="seg"><button class="btn small on" data-pal="items">아이템</button><button class="btn small" data-pal="books">마법이 부여된 책</button></div>
+            </div>
             <div class="row">
-              <input id="pal-search" type="search" placeholder="아이템 검색 (예: diamond)" spellcheck="false">
+              <input id="pal-search" type="search" placeholder="검색 (예: 다이아몬드, diamond, 날카로움)" spellcheck="false">
               <input id="pal-amount" type="number" min="1" max="99" value="1" class="w60" title="개수">
             </div>
-            <p class="muted small-text">빈 칸으로 끌어다 놓거나, 클릭하면 인벤토리에 바로 들어갑니다.</p>
+            <p class="muted small-text">빈 칸으로 끌어다 놓거나, 클릭하면 인벤토리에 바로 들어갑니다. 셜커 상자를 클릭하면 안을 볼 수 있습니다.</p>
             <div class="pal-grid" id="pal-grid"></div>
           </div>
         </div>

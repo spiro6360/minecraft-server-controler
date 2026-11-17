@@ -2,6 +2,7 @@
 
 import { PanelClient } from './api.js';
 import { InventoryView, escapeHtml } from './inventory.js';
+import { loadKorean } from './items.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -9,6 +10,11 @@ const STORE_KEY = 'webpanel.login';
 
 let client = null;
 let invView = null;
+
+// 아이템·마법부여 한국어 이름 (처음 한 번만 받고 브라우저에 기억)
+loadKorean()
+  .then((fresh) => { if (fresh && invView) invView.refreshNames(); })
+  .catch(() => { /* 못 받으면 영어 이름으로 표시 */ });
 let currentTab = 'dashboard';
 let players = { online: [], offline: [] };
 let settings = null;

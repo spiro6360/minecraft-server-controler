@@ -1,6 +1,10 @@
-// 플레이어 상세 화면: 정보/관리 버튼, 인벤토리·엔더상자 실시간 표시, 끌어서 옮기기, 아이템 편집.
+// 플레이어 상세 화면: 정보/관리 버튼, 인벤토리·엔더상자·셜커 상자 실시간 표시, 끌어서 옮기기, 아이템 편집.
+//
+// 칸 종류(type): "inventory", "ender", "shulker:<inventory|ender>:<칸번호>" (셜커 상자 안쪽)
 
-import { renderItem, attachTooltip, hideTooltip, prettyName, shortId, displayName, warmIcons } from './items.js';
+import {
+  renderItem, attachTooltip, hideTooltip, shortId, displayName, warmIcons, itemName, enchName, roman,
+} from './items.js';
 
 const $ = (s) => document.querySelector(s);
 const PALETTE_LIMIT = 400;
@@ -19,6 +23,8 @@ export class InventoryView {
     this.edEnchants = {};
     this.registry = { items: [], enchants: [] };
     this.slotEls = [];
+    this.shulker = null;      // { parentType, parentSlot } 열어 둔 셜커 상자
+    this.paletteMode = 'items';
 
     this.buildGrids();
     this.bindEditor();
@@ -39,6 +45,7 @@ export class InventoryView {
     this.uuid = player.uuid;
     this.player = player;
     this.closeEditor();
+    this.closeShulker();
     this.items = { inventory: [], ender: [] };
     this.renderAll();
     this.renderHeader();
@@ -66,6 +73,7 @@ export class InventoryView {
     this.unsubscribe();
     this.uuid = null;
     this.closeEditor();
+    this.closeShulker();
     hideTooltip();
   }
 
@@ -80,7 +88,7 @@ export class InventoryView {
     if (this.registry.items.length) return;
     try {
       this.registry = await this.client.request('registry.items');
-      $('#dl-items').innerHTML = this.registry.items.map((id) => `<option value="${shortId(id)}">`).join('');
+      this.fillDatalist();
       this.renderPalette();
       warmIcons(this.registry.items, 150);
     } catch (e) {
@@ -120,9 +128,19 @@ export class InventoryView {
       }
     }
 
+    // 열어 둔 셜커 상자 갱신
+    if (this.shulker && this.shulker.parentType === snap.type) {
+      if (!this.itemAt(snap.type, this.shulker.parentSlot)?.contents) {
+        this.closeShulker();
+        if (!initial) this.ui.toast('열어 둔 셜커 상자가 그 칸에서 사라졌습니다');
+      } else {
+        this.renderShulker(prev, initial);
+      }
+    }
+
     // 편집 중인 칸이 인게임에서 바뀐 경우
-    if (this.selected && this.selected.type === snap.type) {
-      const now = snap.items[this.selected.slot] || null;
+    if (this.selected && baseType(this.selected.type) === snap.type) {
+      const now = this.itemAt(this.selected.type, this.selected.slot);
       if (JSON.stringify(now) !== JSON.stringify(this.editorOrig)) {
         if (this.editorDirty) $('#ed-changed').classList.remove('hidden');
         else this.openEditor(this.selected.type, this.selected.slot);
@@ -146,24 +164,32 @@ export class InventoryView {
     make($('#inv-hotbar'), 'inventory', 0, 8);
     make($('#inv-ender'), 'ender', 0, 26);
 
-    this.slotEls = [...document.querySelectorAll('#tab-player .inv-card .slot')];
+    make($('#sh-grid'), 'shulker:none:0', 0, 26);
+
+    this.slotEls = [...document.querySelectorAll('#tab-player .inv-card .slot, #sh-grid .slot')];
+    this.shulkerEls = [...document.querySelectorAll('#sh-grid .slot')];
     for (const el of this.slotEls) this.bindSlot(el);
   }
 
   itemAt(type, slot) {
+    if (type.startsWith('shulker:')) {
+      const [, pt, ps] = type.split(':');
+      return this.itemAt(pt, +ps)?.contents?.[slot] || null;
+    }
     return (this.items[type] || [])[slot] || null;
   }
 
   bindSlot(el) {
-    const type = el.dataset.type;
+    // 셜커 칸은 어떤 상자를 여느냐에 따라 type 이 바뀌므로 매번 읽는다
+    const type = () => el.dataset.type;
     const slot = +el.dataset.slot;
-    attachTooltip(el, () => this.itemAt(type, slot));
+    attachTooltip(el, () => this.itemAt(type(), slot));
 
-    el.addEventListener('click', () => this.openEditor(type, slot));
+    el.addEventListener('click', () => this.openEditor(type(), slot));
     el.addEventListener('dragstart', (e) => {
-      if (!this.itemAt(type, slot)) { e.preventDefault(); return; }
+      if (!this.itemAt(type(), slot)) { e.preventDefault(); return; }
       hideTooltip();
-      e.dataTransfer.setData('text/plain', JSON.stringify({ src: 'slot', type, slot }));
+      e.dataTransfer.setData('text/plain', JSON.stringify({ src: 'slot', type: type(), slot }));
       e.dataTransfer.effectAllowed = 'move';
     });
     el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop-target'); });
@@ -173,7 +199,7 @@ export class InventoryView {
       el.classList.remove('drop-target');
       let src;
       try { src = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
-      this.handleDrop(src, type, slot, e.shiftKey);
+      this.handleDrop(src, type(), slot, e.shiftKey);
     });
   }
 
@@ -189,7 +215,7 @@ export class InventoryView {
         });
       } else if (src.src === 'palette') {
         await this.client.request('inv.set', {
-          uuid: this.uuid, type: toType, slot: toSlot, item: { id: src.id, amount: this.paletteAmount() },
+          uuid: this.uuid, type: toType, slot: toSlot, item: this.paletteItem(src.item, true),
         });
       }
     } catch (e) {
@@ -221,13 +247,15 @@ export class InventoryView {
       try {
         await this.client.request('inv.set', { uuid: this.uuid, type: src.type, slot: src.slot, item: null });
         if (this.selected && this.selected.type === src.type && this.selected.slot === src.slot) this.closeEditor();
+        if (this.shulker && src.type === this.shulker.parentType && src.slot === this.shulker.parentSlot) this.closeShulker();
       } catch (err) { this.ui.toast(err.message, true); }
     });
 
     document.querySelectorAll('[data-clear]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        const type = btn.dataset.clear;
-        const label = type === 'ender' ? '엔더상자' : '인벤토리';
+        const type = btn.dataset.clear === 'shulker' ? this.shulkerType() : btn.dataset.clear;
+        if (!type) return;
+        const label = type === 'ender' ? '엔더상자' : type === 'inventory' ? '인벤토리' : '셜커 상자';
         if (!(await this.ui.confirm(`${this.player?.name} 의 ${label}를 전부 비울까요? 되돌릴 수 없습니다.`))) return;
         try {
           await this.client.request('inv.clear', { uuid: this.uuid, type });
@@ -318,6 +346,7 @@ export class InventoryView {
 
   bindEditor() {
     $('#ed-close').addEventListener('click', () => this.closeEditor());
+    $('#sh-close').addEventListener('click', () => this.closeShulker());
     for (const id of ['#ed-type', '#ed-amount', '#ed-name', '#ed-lore', '#ed-damage']) {
       $(id).addEventListener('input', () => { this.editorDirty = true; this.previewEditor(); });
     }
@@ -355,6 +384,7 @@ export class InventoryView {
     this.editorDirty = false;
     $('#editor').classList.remove('hidden');
     $('#ed-changed').classList.add('hidden');
+    if (item?.contents && !type.startsWith('shulker:')) this.openShulker(type, slot);
     $('#ed-title').textContent = item ? '아이템 편집' : '빈 칸에 아이템 넣기';
     $('#ed-where').textContent = slotLabel(type, slot);
     $('#ed-type').value = item ? shortId(item.id) : '';
@@ -366,7 +396,7 @@ export class InventoryView {
     $('#ed-damage-max').textContent = item?.maxDamage ? `(0 = 새것, 최대 ${item.maxDamage})` : '';
     this.edEnchants = { ...(item?.enchants || {}) };
     $('#ed-ench-add').innerHTML = '<option value="">마법부여 선택</option>' +
-      this.registry.enchants.map((e) => `<option value="${e.id}">${prettyName(e.id)} (최대 ${e.maxLevel})</option>`).join('');
+      this.sortedEnchants().map((e) => `<option value="${e.id}">${enchName(e.id)} (최대 ${roman(e.maxLevel)})</option>`).join('');
     $('#ed-delete').disabled = !item;
     $('#ed-dup').disabled = !item;
     this.renderEnchants();
@@ -388,7 +418,9 @@ export class InventoryView {
     for (const [id, lv] of entries) {
       const row = document.createElement('div');
       row.className = 'ench-item';
-      row.innerHTML = `<span>${prettyName(id)}</span>`;
+      const label = document.createElement('span');
+      label.textContent = enchName(id);
+      row.appendChild(label);
       const right = document.createElement('div');
       right.className = 'row';
       const input = document.createElement('input');
@@ -407,7 +439,7 @@ export class InventoryView {
   previewEditor() {
     const id = normalizeId($('#ed-type').value);
     const amount = +$('#ed-amount').value || 1;
-    $('#ed-id').textContent = id || '(종류를 입력하세요)';
+    $('#ed-id').textContent = id ? `${itemName(id)} (${shortId(id)})` : '(종류를 입력하세요)';
     renderItem($('#ed-icon'), id ? { id, amount, enchants: this.edEnchants } : null);
   }
 
@@ -447,50 +479,188 @@ export class InventoryView {
     } catch (e) { this.ui.toast(e.message, true); }
   }
 
+  // ------------------------------------------------------------ 셜커 상자
+
+  shulkerType() {
+    return this.shulker ? `shulker:${this.shulker.parentType}:${this.shulker.parentSlot}` : null;
+  }
+
+  openShulker(parentType, parentSlot) {
+    const same = this.shulker && this.shulker.parentType === parentType && this.shulker.parentSlot === parentSlot;
+    this.shulker = { parentType, parentSlot };
+    const type = this.shulkerType();
+    for (const el of this.shulkerEls) el.dataset.type = type;
+    $('#shulker').classList.remove('hidden');
+    if (!same) this.renderShulker(null, true);
+  }
+
+  closeShulker() {
+    this.shulker = null;
+    $('#shulker').classList.add('hidden');
+    for (const el of this.shulkerEls) {
+      el.dataset.type = 'shulker:none:0';
+      renderItem(el, null);
+      el.draggable = false;
+    }
+    if (this.selected && this.selected.type.startsWith('shulker:')) this.closeEditor();
+  }
+
+  /** prevItems: 바깥 칸(인벤토리/엔더상자)의 이전 스냅샷. 바뀐 칸만 깜빡이게 한다. */
+  renderShulker(prevItems, initial) {
+    if (!this.shulker) return;
+    const { parentType, parentSlot } = this.shulker;
+    const box = this.itemAt(parentType, parentSlot);
+    const before = prevItems ? (prevItems[parentSlot]?.contents || []) : null;
+    $('#sh-title').textContent = box ? displayName(box) : '셜커 상자';
+    $('#sh-where').textContent = `${slotLabel(parentType, parentSlot)}에 있는 상자 · 안의 칸도 끌어서 옮길 수 있습니다`;
+    for (const el of this.shulkerEls) {
+      const i = +el.dataset.slot;
+      const item = box?.contents?.[i] || null;
+      const changed = !before || JSON.stringify(item) !== JSON.stringify(before[i] || null);
+      if (!changed) continue;
+      renderItem(el, item);
+      el.draggable = !!item;
+      if (!initial) {
+        el.classList.remove('flash');
+        void el.offsetWidth;
+        el.classList.add('flash');
+      }
+    }
+  }
+
   // ------------------------------------------------------------ 아이템 목록 (팔레트)
 
   bindPalette() {
     $('#pal-search').addEventListener('input', () => this.renderPalette());
+    document.querySelectorAll('[data-pal]').forEach((b) => b.addEventListener('click', () => {
+      this.paletteMode = b.dataset.pal;
+      document.querySelectorAll('[data-pal]').forEach((x) => x.classList.toggle('on', x === b));
+      this.renderPalette();
+    }));
+  }
+
+  /** 한국어 이름이 늦게 도착했을 때 다시 그린다 (app.js 가 호출) */
+  refreshNames() {
+    this.fillDatalist();
+    this.renderPalette();
+    if (this.selected && !this.editorDirty) this.openEditor(this.selected.type, this.selected.slot);
+    if (this.shulker) this.renderShulker(null, true);
+  }
+
+  fillDatalist() {
+    const dl = $('#dl-items');
+    dl.innerHTML = '';
+    for (const id of this.registry.items) {
+      const o = document.createElement('option');
+      o.value = shortId(id);
+      o.textContent = itemName(id);
+      dl.appendChild(o);
+    }
+  }
+
+  sortedEnchants() {
+    return [...this.registry.enchants].sort((a, b) => enchName(a.id).localeCompare(enchName(b.id), 'ko'));
   }
 
   paletteAmount() {
     return Math.max(1, Math.min(99, parseInt($('#pal-amount').value, 10) || 1));
   }
 
+  /** 팔레트 아이템 + 개수. 마법이 부여된 책은 한 칸에 1권만 (겹쳐지지 않는 아이템이라) */
+  paletteItem(item, forSlot) {
+    const book = !!item.enchants;
+    return { ...item, amount: book && forSlot ? 1 : this.paletteAmount() };
+  }
+
+  /** 검색어가 아이템 id 또는 한국어 이름에 들어 있는지 */
+  matches(q, id, name) {
+    if (!q) return true;
+    return id.includes(q.replace(/\s+/g, '_')) || name.toLowerCase().includes(q);
+  }
+
   renderPalette() {
-    const q = $('#pal-search').value.trim().toLowerCase().replace(/\s+/g, '_');
+    const q = $('#pal-search').value.trim().toLowerCase();
     const grid = $('#pal-grid');
     grid.innerHTML = '';
-    const list = this.registry.items.filter((id) => !q || id.includes(q)).slice(0, PALETTE_LIMIT);
+    grid.classList.toggle('books', this.paletteMode === 'books');
+    if (this.paletteMode === 'books') {
+      this.renderBooks(grid, q);
+      return;
+    }
+    const list = this.registry.items.filter((id) => this.matches(q, id, itemName(id))).slice(0, PALETTE_LIMIT);
     for (const id of list) {
-      const el = document.createElement('div');
-      el.className = 'slot';
-      el.draggable = true;
-      const item = { id, amount: 1 };
-      renderItem(el, item, { lazy: true });
-      attachTooltip(el, () => item);
-      el.addEventListener('dragstart', (e) => {
-        hideTooltip();
-        e.dataTransfer.setData('text/plain', JSON.stringify({ src: 'palette', id }));
-        e.dataTransfer.effectAllowed = 'copy';
-      });
-      el.addEventListener('click', () => this.paletteClick(id));
-      grid.appendChild(el);
+      grid.appendChild(this.paletteSlot({ id, amount: 1 }));
     }
     if (!list.length) grid.innerHTML = '<div class="muted">결과 없음</div>';
   }
 
-  async paletteClick(id) {
+  /** 마법이 부여된 책: 마법부여 하나당 한 줄, 레벨 버튼을 누르거나 끌어서 꺼낸다 */
+  renderBooks(grid, q) {
+    const list = this.sortedEnchants().filter((e) => this.matches(q, e.id, enchName(e.id)));
+    for (const e of list) {
+      const row = document.createElement('div');
+      row.className = 'book-row';
+      const maxBook = { id: 'minecraft:enchanted_book', amount: 1, enchants: { [e.id]: e.maxLevel } };
+      row.appendChild(this.paletteSlot(maxBook));
+      const name = document.createElement('div');
+      name.className = 'book-name';
+      name.textContent = enchName(e.id);
+      const sub = document.createElement('div');
+      sub.className = 'muted book-id';
+      sub.textContent = shortId(e.id);
+      name.appendChild(sub);
+      row.appendChild(name);
+      const levels = document.createElement('div');
+      levels.className = 'book-levels';
+      for (let lv = 1; lv <= e.maxLevel; lv++) {
+        const item = { id: 'minecraft:enchanted_book', amount: 1, enchants: { [e.id]: lv } };
+        const b = document.createElement('button');
+        b.className = 'btn small';
+        b.textContent = roman(lv);
+        b.title = `${enchName(e.id)} ${roman(lv)} 책 꺼내기 (끌어서 칸에 놓을 수도 있음)`;
+        b.draggable = true;
+        b.addEventListener('dragstart', (ev) => {
+          ev.dataTransfer.setData('text/plain', JSON.stringify({ src: 'palette', item }));
+          ev.dataTransfer.effectAllowed = 'copy';
+        });
+        b.addEventListener('click', () => this.paletteClick(item));
+        levels.appendChild(b);
+      }
+      row.appendChild(levels);
+      grid.appendChild(row);
+    }
+    if (!list.length) grid.innerHTML = '<div class="muted">결과 없음</div>';
+  }
+
+  paletteSlot(item) {
+    const el = document.createElement('div');
+    el.className = 'slot';
+    el.draggable = true;
+    renderItem(el, item, { lazy: true });
+    attachTooltip(el, () => item);
+    el.addEventListener('dragstart', (e) => {
+      hideTooltip();
+      e.dataTransfer.setData('text/plain', JSON.stringify({ src: 'palette', item }));
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+    el.addEventListener('click', () => this.paletteClick(item));
+    return el;
+  }
+
+  async paletteClick(base) {
     if (!this.uuid) return;
-    const amount = this.paletteAmount();
     try {
       // 빈 칸을 선택해 둔 상태면 그 칸에, 아니면 인벤토리 빈 곳에 넣는다
       if (this.selected && !this.itemAt(this.selected.type, this.selected.slot)) {
-        await this.client.request('inv.set', { uuid: this.uuid, ...this.selected, item: { id, amount } });
+        await this.client.request('inv.set', { uuid: this.uuid, ...this.selected, item: this.paletteItem(base, true) });
         this.openEditor(this.selected.type, this.selected.slot);
       } else {
-        await this.client.request('inv.give', { uuid: this.uuid, type: 'inventory', item: { id, amount } });
-        this.ui.toast(`${prettyName(id)} ×${amount} 지급`);
+        const item = this.paletteItem(base, false);
+        await this.client.request('inv.give', { uuid: this.uuid, type: 'inventory', item });
+        const label = item.enchants
+          ? `${enchName(Object.keys(item.enchants)[0])} ${roman(Object.values(item.enchants)[0])} 책`
+          : itemName(item.id);
+        this.ui.toast(`${label} ×${item.amount} 지급`);
       }
     } catch (e) { this.ui.toast(e.message, true); }
   }
@@ -502,7 +672,15 @@ function normalizeId(v) {
   return s.includes(':') ? s : `minecraft:${s}`;
 }
 
+function baseType(type) {
+  return type.startsWith('shulker:') ? type.split(':')[1] : type;
+}
+
 function slotLabel(type, slot) {
+  if (type.startsWith('shulker:')) {
+    const [, pt, ps] = type.split(':');
+    return `${slotLabel(pt, +ps)}의 셜커 상자 ${slot + 1}번 칸`;
+  }
   if (type === 'ender') return `엔더상자 ${slot + 1}번 칸`;
   if (slot <= 8) return `핫바 ${slot + 1}번 칸`;
   if (slot <= 35) return `가방 ${slot - 8}번 칸`;

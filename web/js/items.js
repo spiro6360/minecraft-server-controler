@@ -37,13 +37,54 @@ export function prettyName(id) {
   return shortId(id).split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
+// ---------------------------------------------------------------- 한국어 이름
+// 마인크래프트 공식 한국어 파일(ko_kr.json)에서 아이템/블록/마법부여 이름만 골라 브라우저에 기억한다.
+
+const LANG_URL = `https://assets.mcasset.cloud/${MC_VERSION}/assets/minecraft/lang/ko_kr.json`;
+const LANG_KEY = `webpanel.ko.${MC_VERSION}`;
+let ko = null;
+try { ko = JSON.parse(localStorage.getItem(LANG_KEY) || 'null'); } catch { ko = null; }
+
+/** 한국어 이름을 불러온다. 이미 있으면 바로 끝. 새로 받았으면 true. */
+export async function loadKorean() {
+  if (ko) return false;
+  const res = await fetch(LANG_URL);
+  if (!res.ok) throw new Error('한국어 이름 파일을 받지 못했습니다');
+  const all = await res.json();
+  const picked = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (k.startsWith('item.minecraft.') || k.startsWith('block.minecraft.') || k.startsWith('enchantment.minecraft.')) {
+      picked[k] = v;
+    }
+  }
+  ko = picked;
+  try { localStorage.setItem(LANG_KEY, JSON.stringify(picked)); } catch { /* 저장 불가면 이번만 사용 */ }
+  return true;
+}
+
+/** 아이템 한국어 이름 (없으면 영어 이름) */
+export function itemName(id) {
+  const n = shortId(id);
+  return (ko && (ko[`item.minecraft.${n}`] || ko[`block.minecraft.${n}`])) || prettyName(id);
+}
+
+/** 마법부여 한국어 이름 */
+export function enchName(id) {
+  return (ko && ko[`enchantment.minecraft.${shortId(id)}`]) || prettyName(id);
+}
+
+const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+export function roman(n) {
+  return ROMAN[n] || String(n);
+}
+
 /** &a 같은 색 코드를 지운 순수 텍스트 */
 export function plain(text) {
   return String(text || '').replace(/&[0-9a-fk-orx]/gi, '');
 }
 
 export function displayName(item) {
-  return item.name ? plain(item.name) : prettyName(item.id);
+  return item.name ? plain(item.name) : itemName(item.id);
 }
 
 function tryLoad(url) {
@@ -115,7 +156,7 @@ function showIcon(el, id, url) {
     holder.innerHTML = '';
     const txt = document.createElement('div');
     txt.className = 'txt';
-    txt.textContent = prettyName(id);
+    txt.textContent = itemName(id);
     holder.appendChild(txt);
     return;
   }
@@ -221,7 +262,11 @@ export function attachTooltip(el, getItem) {
       tip.appendChild(d);
     };
     add('t-name', displayName(item) + (item.amount > 1 ? ` ×${item.amount}` : ''));
-    for (const [k, lv] of Object.entries(item.enchants || {})) add('t-ench', `${prettyName(k)} ${lv}`);
+    for (const [k, lv] of Object.entries(item.enchants || {})) add('t-ench', `${enchName(k)} ${roman(lv)}`);
+    if (item.contents) {
+      const inside = item.contents.filter(Boolean);
+      add('t-lore', inside.length ? `안에 ${inside.length}칸 들어 있음 (클릭해서 보기)` : '비어 있음 (클릭해서 열기)');
+    }
     for (const line of item.lore || []) add('t-lore', plain(line));
     if (item.maxDamage) add('t-id', `내구도 ${item.maxDamage - (item.damage || 0)} / ${item.maxDamage}`);
     add('t-id', item.id);
