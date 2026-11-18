@@ -44,6 +44,8 @@ export class InventoryView {
     if (this.uuid && this.uuid !== player.uuid) this.unsubscribe();
     this.uuid = player.uuid;
     this.player = player;
+    this.offStats = null;     // 오프라인 플레이어의 저장 파일 상태 (체력, 배고픔 등)
+    this.offStatsFor = null;
     this.closeEditor();
     this.closeShulker();
     this.items = { inventory: [], ender: [] };
@@ -80,7 +82,24 @@ export class InventoryView {
   /** 접속자 정보가 갱신될 때 app.js 가 호출 */
   updatePlayer(player) {
     if (!this.uuid || player.uuid !== this.uuid) return;
+    // 방금 나갔으면 저장 파일 상태를 새로 읽는다
+    if (this.player?.online && !player.online) { this.offStats = null; this.offStatsFor = null; }
     this.player = player;
+    this.renderHeader();
+  }
+
+  /** 오프라인 플레이어의 체력/배고픔/게임모드 등을 저장 파일에서 읽어 온다 */
+  async loadOfflineStats() {
+    const p = this.player;
+    if (!p || p.online) return;
+    this.offStatsFor = p.uuid;
+    try {
+      const st = await this.client.request('player.offline', { uuid: p.uuid });
+      if (this.player?.uuid !== p.uuid) return;
+      this.offStats = st;
+    } catch (e) {
+      this.offStats = { hasData: false, error: e.message };
+    }
     this.renderHeader();
   }
 
@@ -276,13 +295,17 @@ export class InventoryView {
     face.src = `https://mc-heads.net/avatar/${p.uuid}/48`;
     face.onerror = () => { face.removeAttribute('src'); };
     const tags = [p.op ? 'OP' : null, p.whitelisted ? '화이트리스트' : null, p.banned ? '차단됨' : null].filter(Boolean);
+    if (!p.online && this.offStatsFor !== p.uuid) this.loadOfflineStats();
+    const st = p.online ? p : (this.offStats?.hasData ? this.offStats : null);
+    const where = st && st.x !== undefined ? ` · ${st.world} (${st.x}, ${st.y}, ${st.z})` : '';
+    const stText = st ? `체력 ${st.health}/${st.maxHealth} · 배고픔 ${st.food}/20 · 레벨 ${st.level} · ${GM_LABEL[st.gamemode] || st.gamemode}${where}` : '';
     $('#pd-info').textContent = p.online
-      ? `체력 ${p.health}/${p.maxHealth} · 배고픔 ${p.food}/20 · 레벨 ${p.level} · ${p.world} (${p.x}, ${p.y}, ${p.z}) · 핑 ${p.ping}ms ${tags.length ? '· ' + tags.join(', ') : ''}`
-      : `오프라인 ${tags.length ? '· ' + tags.join(', ') : ''}`;
+      ? `${stText} · 핑 ${p.ping}ms ${tags.length ? '· ' + tags.join(', ') : ''}`
+      : `오프라인${st ? ' · ' + stText : ''} ${tags.length ? '· ' + tags.join(', ') : ''}`;
 
     // 입력 중인 칸이 있으면 버튼을 다시 그리지 않는다 (입력 내용 보존)
     const box = $('#pd-actions');
-    const key = `${p.uuid}|${p.online}|${p.op}|${p.whitelisted}|${p.banned}|${p.gamemode}|${this.ui.onlinePlayers().map((o) => o.uuid).join(',')}`;
+    const key = `${p.uuid}|${p.online}|${p.op}|${p.whitelisted}|${p.banned}|${p.gamemode}|${st?.gamemode}|${this.ui.onlinePlayers().map((o) => o.uuid).join(',')}`;
     if (box.dataset.key === key) return;
     if (box.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
     box.dataset.key = key;
@@ -296,20 +319,24 @@ export class InventoryView {
       box.appendChild(b);
       return b;
     };
+    // 오프라인이면 저장 파일을 고친다 → 다음에 접속할 때 적용
     const act = (type, value, okMsg) => this.client.request('player.action', { uuid: p.uuid, type, value })
-      .then(() => okMsg && this.ui.toast(okMsg))
+      .then(() => {
+        if (okMsg) this.ui.toast(p.online ? okMsg : `${okMsg} (다음 접속 때 적용)`);
+        if (!p.online) this.loadOfflineStats();
+      })
       .catch((e) => this.ui.toast(e.message, true));
 
-    if (p.online) {
+    if (st) {
       const gm = document.createElement('select');
-      gm.innerHTML = [['SURVIVAL', '서바이벌'], ['CREATIVE', '크리에이티브'], ['ADVENTURE', '모험'], ['SPECTATOR', '관전']]
-        .map(([v, l]) => `<option value="${v}" ${p.gamemode === v ? 'selected' : ''}>${l}</option>`).join('');
+      gm.innerHTML = Object.entries(GM_LABEL)
+        .map(([v, l]) => `<option value="${v}" ${st.gamemode === v ? 'selected' : ''}>${l}</option>`).join('');
       gm.addEventListener('change', () => act('gamemode', gm.value, '게임모드 변경'));
       box.appendChild(gm);
       btn('회복', () => act('heal', null, '체력 회복'));
       btn('배고픔 채우기', () => act('feed', null, '배고픔 회복'));
       btn('레벨 설정', async () => {
-        const v = await this.ui.prompt('설정할 레벨', String(p.level));
+        const v = await this.ui.prompt('설정할 레벨', String(st.level));
         if (v !== null) act('level', v, '레벨 변경');
       });
       btn('스폰으로 이동', () => act('tpspawn', null, '스폰으로 이동'));
@@ -321,6 +348,8 @@ export class InventoryView {
         sel.addEventListener('change', () => { if (sel.value) act('tpto', sel.value, '텔레포트'); sel.value = ''; });
         box.appendChild(sel);
       }
+    }
+    if (p.online) {
       btn('메시지', async () => {
         const v = await this.ui.prompt(`${p.name} 에게 보낼 메시지 (&색코드 가능)`, '');
         if (v) act('message', v, '메시지 전송');
@@ -671,6 +700,8 @@ function normalizeId(v) {
   if (!s) return '';
   return s.includes(':') ? s : `minecraft:${s}`;
 }
+
+const GM_LABEL = { SURVIVAL: '서바이벌', CREATIVE: '크리에이티브', ADVENTURE: '모험', SPECTATOR: '관전' };
 
 function baseType(type) {
   return type.startsWith('shulker:') ? type.split(':')[1] : type;
